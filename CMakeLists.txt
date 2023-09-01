@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.12)
 # Pull in PICO SDK (must be before project)
 set(PICO_SDK_PATH $ENV{PICO_SDK_PATH})
 include(${PICO_SDK_PATH}/pico_sdk_init.cmake)
+include(pico_extras_import.cmake)
 
 project(pico_env_mon C CXX ASM)
 set(CMAKE_C_STANDARD 11)
@@ -21,5 +22,5 @@ target_sources(
     src/images.cpp
 )
 
-target_link_libraries(pico_env_mon PRIVATE pico_stdlib hardware_spi)
+target_link_libraries(pico_env_mon PRIVATE pico_stdlib hardware_spi hardware_sleep)
 pico_add_extra_outputs(pico_env_mon)

@@ -7,7 +7,15 @@
 
 #include "pico/stdlib.h"
 #include "pico/binary_info.h"
+#include "pico/sleep.h"
 #include "hardware/spi.h"
+#include "hardware/clocks.h"
+#include "hardware/rosc.h"
+#include "hardware/structs/scb.h"
+#include "hardware/rtc.h"
+#include "hardware/pll.h"
+#include "hardware/clocks.h"
+
 
 #include "ls027b4dh01.hpp"
 #include "images.hpp"
@@ -20,9 +28,9 @@
 
 #include "mhz19c.hpp"
 
-static const int LCD_TOGGLE_INTERVAL_MS = 500;
+static const bool DEBUG = false;
 
-static const int SAMPLING_INTERVAL_MS = 5000;
+static const int SAMPLING_INTERVAL_MS = 60000;
 
 static const int GRAPH_TIME_RANGE_H = 24;
 static const int GRAPH_SHIFT_INTERVAL_MS = GRAPH_TIME_RANGE_H * 3600 * 1000 / Graph::DEPTH;
@@ -30,6 +38,8 @@ static const int GRAPH_SHIFT_INTERVAL_MS = GRAPH_TIME_RANGE_H * 3600 * 1000 / Gr
 // 温度は湿度・気圧の補正用であり気温よりやや高いため適当に補正する
 // 補正値の適正値はセンサの使用条件により異なる
 static const float TEMPERATURE_OFFSET = -1.5f;
+
+const uint LED_BUILTIN_PIN = PICO_DEFAULT_LED_PIN;
 
 LcdScreen screen;
 LcdDriver lcd(spi_default, 20, 22, 21);
@@ -44,13 +54,40 @@ Graph graph_c(0, 180, 10.0f); // CO2
 
 static void sample(bool shift);
 
+static void sleep_callback(void) {
+}
+
+static void rtc_sleep(void) {
+    uart_default_tx_wait_blocking();
+    sleep_goto_sleep_until_alarm(); // Processor halts here until RTC alarm (custom function in `sleep.c`)
+}
+
+void recover_from_sleep(uint scb_orig, uint clock0_orig, uint clock1_orig){
+    //Re-enable ring Oscillator control
+    rosc_write(&rosc_hw->ctrl, ROSC_CTRL_ENABLE_BITS);
+
+    //reset procs back to default
+    scb_hw->scr = scb_orig;
+    clocks_hw->sleep_en0 = clock0_orig;
+    clocks_hw->sleep_en1 = clock1_orig;
+
+    //reset clocks
+    //clocks_init();  // This line would probably degrade RTC clock time by restarting it
+    stdio_init_all();
+}
+
 int main() {
     stdio_init_all();
+
+    gpio_init(LED_BUILTIN_PIN);
+    gpio_set_dir(LED_BUILTIN_PIN, GPIO_OUT);
 
     spi_init(spi_default, 2000 * 1000);
     gpio_set_function(PICO_DEFAULT_SPI_RX_PIN, GPIO_FUNC_SPI);
     gpio_set_function(PICO_DEFAULT_SPI_SCK_PIN, GPIO_FUNC_SPI);
     gpio_set_function(PICO_DEFAULT_SPI_TX_PIN, GPIO_FUNC_SPI);
+
+    sleep_ms(250); // Wait for power to stabilize and other devices to boot
 
     lcd.init();
     bme280.init();
@@ -58,36 +95,79 @@ int main() {
     screen.clear(1);
     lcd.write(screen.data);
     lcd.disp_on();
+    
+    // TODO: Cleanup RTC code into a .hpp
+    
+    // Initial RTC time isn't important, only using RTC alarm on .sec = "0" (every minute)
+    datetime_t t = {
+            .year  = 2023,
+            .month = 01,
+            .day   = 01,
+            .dotw  = 0, // 0 is Sunday, so 5 is Friday
+            .hour  = 00,
+            .min   = 00,
+            .sec   = 00
+    };
+    
+    //alarm on .sec = "0" (every minute)
+    datetime_t alarm = {
+        .year  = -1,
+        .month = -1,
+        .day   = -1,
+        .dotw  = -1,
+        .hour  = -1,
+        .min   = -1,
+        .sec   = 00
+    };
+    
+    // Start the RTC running, set time and set repeating alarm
+    rtc_init();
+    rtc_set_datetime(&t);
+    rtc_set_alarm(&alarm, &sleep_callback);
 
-    absolute_time_t t_next_lcd_toggle = make_timeout_time_ms(LCD_TOGGLE_INTERVAL_MS);
-    int sampling_interval_counter = SAMPLING_INTERVAL_MS;
+    
+    //save clock speed values for later recovery from deep sleep with clocks turned off or slowed down
+    uint scb_orig = scb_hw->scr;
+    uint clock0_orig = clocks_hw->sleep_en0;
+    uint clock1_orig = clocks_hw->sleep_en1;
+    
+    // TODO: Move all above this comment in main() into a seperate setup() for readability
+
+    absolute_time_t t_next_sample = make_timeout_time_ms(SAMPLING_INTERVAL_MS);
     int graph_shift_interval_counter = 0;
 
     while (true) {
-        // keep interval
-        sleep_until(t_next_lcd_toggle);
-        t_next_lcd_toggle = delayed_by_ms(t_next_lcd_toggle, LCD_TOGGLE_INTERVAL_MS);
+        // Go to deep sleep until RTC alarm interrupts
+        rtc_sleep();
         
-        sampling_interval_counter += LCD_TOGGLE_INTERVAL_MS;
-        graph_shift_interval_counter += LCD_TOGGLE_INTERVAL_MS;
-
-        // sampling timing
-        if (sampling_interval_counter > SAMPLING_INTERVAL_MS) {
-            sampling_interval_counter -= SAMPLING_INTERVAL_MS;
-
-            // graph shift timing
-            bool shift = false;
-            if (graph_shift_interval_counter > GRAPH_SHIFT_INTERVAL_MS) {
-                graph_shift_interval_counter -= GRAPH_SHIFT_INTERVAL_MS;
-                shift = true;
-            }
-
-            sample(shift);
+        // Restore clock speeds to what they were before deep sleep
+        recover_from_sleep(scb_orig, clock0_orig, clock1_orig);
+        
+        // Re-init mhz19 otherwise it hangs comming out of sleep, also had issues with loose headers causing lockups even without deep sleep
+        mhz19c.init();
+        
+        t_next_sample = delayed_by_ms(t_next_sample, SAMPLING_INTERVAL_MS);
+        
+        if (DEBUG) {
+            gpio_put(LED_BUILTIN_PIN, 1);
         }
+        
+        graph_shift_interval_counter += SAMPLING_INTERVAL_MS;
+
+        // graph shift timing
+        bool shift = false;
+        if (graph_shift_interval_counter > GRAPH_SHIFT_INTERVAL_MS) {
+            graph_shift_interval_counter -= GRAPH_SHIFT_INTERVAL_MS;
+            shift = true;
+        }
+
+        sample(shift);
 
         // LCD update
         lcd.write(screen.data);
-        lcd.toggle_com();
+        if (DEBUG) {
+            gpio_put(LED_BUILTIN_PIN, 0);
+        }
     }
 }
 
@@ -202,7 +282,9 @@ static void sample(bool shift) {
     absolute_time_t t_end = get_absolute_time();
 
     // show screen update time
-    //int64_t t_elapsed_us = absolute_time_diff_us(t_start, t_end);
-    //sprintf(s, "%ld", t_elapsed_us);
-    //digit16_draw_string(screen, 0, 0, s);
+    if (DEBUG) {
+        int64_t t_elapsed_us = absolute_time_diff_us(t_start, t_end);
+        sprintf(s, "%ld", t_elapsed_us);
+        digit16_draw_string(screen, 0, 0, s);
+    }
 }
