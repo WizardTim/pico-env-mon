@@ -4,6 +4,7 @@
 #include "stdint.h"
 #include "pico/stdlib.h"
 #include "hardware/spi.h"
+#include "hardware/pwm.h"
 #include "msb1stimage.hpp"
 
 static constexpr int SCREEN_WIDTH = 400;
@@ -18,8 +19,6 @@ public:
 };
 
 class LcdDriver {
-private:
-    bool _com_state = 0;
 public:
     spi_inst_t * const spi;
     const int pin_scs;
@@ -36,19 +35,22 @@ public:
         gpio_init(pin_extcomin);
         gpio_set_dir(pin_scs, GPIO_OUT);
         gpio_set_dir(pin_disp, GPIO_OUT);
-        gpio_set_dir(pin_extcomin, GPIO_OUT);
         gpio_put(pin_scs, 0);
         gpio_put(pin_disp, 0);
-        gpio_put(pin_extcomin, 0);
+		
+		// Experimental PWM EXTCOMIN
+		// Control LCD liquid crystal cell polarity inversion with hardware PWM instead of in software (processor can sleep more)
+		// HOWEVER, LCD EXTCOMIN only arms the internal COMZ signal, inversion occurs on next SCS falling edge!
+		// So PWM does 'work', but only during an gpio_put(pin_scs, 0)
+		pwm_config config = pwm_get_default_config();
+		gpio_set_function(pin_extcomin, GPIO_FUNC_PWM);
+		pwm_init(pwm_gpio_to_slice_num(pin_extcomin), &config, true);
+		pwm_set_clkdiv(pwm_gpio_to_slice_num(pin_extcomin), 256); // Minimum PWM speed is ~7.5 Hz using 1 PWM slice and default clock sources
+		pwm_set_gpio_level(pin_extcomin, 65535/2); // 50% duty cycle (only rising edge and period matters, minimum 1 us high)
     }
 
     void disp_on() { gpio_put(pin_disp, 1); }
     void disp_off() { gpio_put(pin_disp, 0); }
-
-    void toggle_com() {
-        _com_state = !_com_state;
-        gpio_put(pin_extcomin, _com_state);
-    }
 
     static uint8_t revert_byte(uint8_t b) {
         return 

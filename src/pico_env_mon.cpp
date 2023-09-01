@@ -20,8 +20,6 @@
 
 #include "mhz19c.hpp"
 
-static const int LCD_TOGGLE_INTERVAL_MS = 500;
-
 static const int SAMPLING_INTERVAL_MS = 5000;
 
 static const int GRAPH_TIME_RANGE_H = 24;
@@ -59,35 +57,27 @@ int main() {
     lcd.write(screen.data);
     lcd.disp_on();
 
-    absolute_time_t t_next_lcd_toggle = make_timeout_time_ms(LCD_TOGGLE_INTERVAL_MS);
-    int sampling_interval_counter = SAMPLING_INTERVAL_MS;
+    absolute_time_t t_next_sample = make_timeout_time_ms(SAMPLING_INTERVAL_MS);
     int graph_shift_interval_counter = 0;
 
     while (true) {
         // keep interval
-        sleep_until(t_next_lcd_toggle);
-        t_next_lcd_toggle = delayed_by_ms(t_next_lcd_toggle, LCD_TOGGLE_INTERVAL_MS);
+        sleep_until(t_next_sample);
+        t_next_sample = delayed_by_ms(t_next_sample, SAMPLING_INTERVAL_MS);
         
-        sampling_interval_counter += LCD_TOGGLE_INTERVAL_MS;
-        graph_shift_interval_counter += LCD_TOGGLE_INTERVAL_MS;
+        graph_shift_interval_counter += SAMPLING_INTERVAL_MS;
 
-        // sampling timing
-        if (sampling_interval_counter > SAMPLING_INTERVAL_MS) {
-            sampling_interval_counter -= SAMPLING_INTERVAL_MS;
+		// graph shift timing
+		bool shift = false;
+		if (graph_shift_interval_counter > GRAPH_SHIFT_INTERVAL_MS) {
+			graph_shift_interval_counter -= GRAPH_SHIFT_INTERVAL_MS;
+			shift = true;
+		}
 
-            // graph shift timing
-            bool shift = false;
-            if (graph_shift_interval_counter > GRAPH_SHIFT_INTERVAL_MS) {
-                graph_shift_interval_counter -= GRAPH_SHIFT_INTERVAL_MS;
-                shift = true;
-            }
-
-            sample(shift);
-        }
+		sample(shift);
 
         // LCD update
         lcd.write(screen.data);
-        lcd.toggle_com();
     }
 }
 
