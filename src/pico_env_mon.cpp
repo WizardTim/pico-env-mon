@@ -77,6 +77,7 @@ int main() {
 		sample(shift);
 
         // LCD update
+		// EXTCOMIN should have rising edge during LCD frame write when SCS is HIGH (0.5 to 20 Hz, but less than frame rate)
         lcd.write(screen.data);
     }
 }

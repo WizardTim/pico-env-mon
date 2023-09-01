@@ -40,7 +40,7 @@ public:
 		
 		// Experimental PWM EXTCOMIN
 		// Control LCD liquid crystal cell polarity inversion with hardware PWM instead of in software (processor can sleep more)
-		// HOWEVER, LCD EXTCOMIN only arms the internal COMZ signal, inversion occurs on next SCS falling edge!
+		// HOWEVER, LCD EXTCOMIN only arms the internal COMZ signal, inversion occurs on next SCS falling edge! (EXTMODE = HIGH)
 		// So PWM does 'work', but only during an gpio_put(pin_scs, 0)
 		pwm_config config = pwm_get_default_config();
 		gpio_set_function(pin_extcomin, GPIO_FUNC_PWM);
