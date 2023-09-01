@@ -21,5 +21,5 @@ target_sources(
     src/images.cpp
 )
 
-target_link_libraries(pico_env_mon PRIVATE pico_stdlib hardware_spi)
+target_link_libraries(pico_env_mon PRIVATE pico_stdlib hardware_spi hardware_pwm)
 pico_add_extra_outputs(pico_env_mon)
